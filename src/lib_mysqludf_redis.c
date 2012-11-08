@@ -247,7 +247,7 @@ my_ulonglong redis_command(
 	c = redisConnect(host,port);
 	if (c->err)
 	{
-		fprintf(stderr,"connection error on (%s/%ld): %s\n",
+		fprintf(stderr,"connection error on (%s/%lld): %s\n",
 				host,port,c->errstr);
 
 		redisFree(c);

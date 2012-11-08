@@ -1,4 +1,4 @@
-PLUGINDIR=`/usr/bin/mysql_config --plugindir`
+PLUGINDIR=`/usr/bin/mysql_config --variable=plugindir`
 INCLUDE=`/usr/bin/mysql_config --include` -I/usr/local/include
 LIBS=-lhiredis -L$(PLUGINDIR)
 
