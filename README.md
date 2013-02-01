@@ -12,6 +12,9 @@ about 3000 calls in a second.
 [UDF]: http://dev.mysql.com/doc/refman/5.1/en/adding-functions.html
 [Redis]: http://redis.io/
 
+I'm not much of a C/C++ programmer, but this branch will support multi-line
+commands, as well as properly escape mysql, and hopefully local sockets.
+
 Requirements
 ------------
 
@@ -41,7 +44,7 @@ Uninstallation
 Using the uninstall.sh
 
 
-Importan Notes
+Important Notes
 --------------
 When you do a lot of redis_command() calling in a short time,
 you may get a lot of error like this "Connection error on (xxxx/xxx):
@@ -70,6 +73,11 @@ Support
 You may ask for help and discuss various other issues on
 the ... and report bugs on the [bug tracker][].
 
-[bug tracker]: http://github.com/jackeylu/mysql2redis/issues
+[bug tracker]: http://github.com/brianhorakh/mysql2redis/issues
+
+
+Credit
+------
+jackeylu
 
 

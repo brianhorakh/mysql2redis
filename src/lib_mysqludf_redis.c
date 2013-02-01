@@ -46,6 +46,11 @@ typedef long long longlong;
  */
 #include <hiredis/hiredis.h>
 
+/**
+ * mysql head file
+ */
+#include <mysql/plugin.h>
+
 /*
  * self-defined head file
  */
@@ -57,7 +62,9 @@ typedef long long longlong;
 extern "C" {
 #endif
 
-#define LIBVERSION "lib_mysqludf_redis version 0.0.1"
+#define LIBVERSION "lib_mysqludf_redis version 0.1.0"
+#define MAX_LEN 8192 // max allowed length of input string, including 0 terminator
+#define MAX_STR 16 // max allowed number of substrings in input string
 
 #ifdef __WIN__
 #define SETENV(name,value)		SetEnvironmentVariable(name,value);
@@ -99,7 +106,6 @@ my_bool redis_command_init(
 ,	char *message
 );
 
-
 DLLEXP 
 void redis_command_deinit(
 	UDF_INIT *initid
@@ -113,10 +119,56 @@ my_ulonglong redis_command(
 ,	char *error
 );
 
+/**
+ * redis_commands
+ * 
+ * execute multiple redis command (ex: select 1\n set x 1\n)
+ */
+DLLEXP 
+my_bool redis_commands_init(
+	UDF_INIT *initid
+,	UDF_ARGS *args
+,	char *message
+);
+
+DLLEXP 
+void redis_commands_deinit(
+	UDF_INIT *initid
+);
+
+DLLEXP 
+my_ulonglong redis_commands(
+	UDF_INIT *initid
+,	UDF_ARGS *args
+,	char *is_null
+,	char *error
+);
+
 
 #ifdef	__cplusplus
 }
 #endif
+
+
+#include <stdlib.h>
+#include <string.h>
+
+void split(char *str, char **splitstr) {      
+  char *p;      
+  int i=0;      
+
+	p = strtok(str,"\n");      
+	while(p!= NULL) { 
+		// printf("%s", p);
+		splitstr[i] = malloc(strlen(p) + 1);
+		if (splitstr[i])
+			strcpy(splitstr[i], p);
+		i++;
+		p = strtok (NULL, ",");       
+		} 
+	}
+
+
 
 /**
  * lib_mysqludf_redis_info
@@ -161,12 +213,20 @@ char* lib_mysqludf_redis_info(
 }
 
 
+
 /**
- * redis_command implementation
+ * redis_command
  *
- * redis_command(host,port,command)
+ * the implementation
  *
+ * see the MySQL error log for the fprintf output
+ *
+ * @return 0 everything is OK
+ *         1 connection error, check the host/port
+ *         2 error with an NULL reply , it is so weird
+ *         3 command may be not a valid command, or other error
  */
+ 
 my_bool redis_command_init(
 	UDF_INIT *initid __attribute__((__unused__))
 ,	UDF_ARGS *args
@@ -193,7 +253,7 @@ my_bool redis_command_init(
 			return 2;
 		}
 
-		if(port <= 0)
+		if(port < 0)
 		{
 			snprintf(message,MYSQL_ERRMSG_SIZE,
 				"The second parameter must be an integer bigger than zero");
@@ -219,24 +279,14 @@ my_bool redis_command_init(
 void redis_command_deinit(UDF_INIT *initid __attribute__((__unused__))){
 	// nonthing need to be cleanup
 }
-/**
- * redis_command
- *
- * the implementation
- *
- * see the MySQL error log for the fprintf output
- *
- * @return 0 everything is OK
- *         1 connection error, check the host/port
- *         2 error with an NULL reply , it is so weird
- *         3 command may be not a valid command, or other error
- */
+
+
 my_ulonglong redis_command(
 		UDF_INIT *initid __attribute__((__unused__)),
 		UDF_ARGS *args,
 		char *is_null __attribute__((__unused__)),
 		char *error __attribute__((__unused__))){
-	char *host = args->args[0];
+	char *hostorfile = args->args[0];
 	long long port = *((long long*)args->args[1]);
 	char *cmd = args->args[2];
 
@@ -244,11 +294,17 @@ my_ulonglong redis_command(
 	redisContext *c = NULL;
 	redisReply *reply = NULL;
 
-	c = redisConnect(host,port);
+	if (port>0) 
+	{
+		c = redisConnect(hostorfile,port);
+	} else {
+		c = redisConnectUnixNonBlock(hostorfile);
+	}
+
 	if (c->err)
 	{
-		fprintf(stderr,"connection error on (%s/%lld): %s\n",
-				host,port,c->errstr);
+		fprintf(stderr,"connection error on (%s:%lld): %s\n",
+				hostorfile,port,c->errstr);
 
 		redisFree(c);
 		c = NULL;
@@ -282,6 +338,162 @@ my_ulonglong redis_command(
 	// do the clean work
 	freeReplyObject(reply);
 	reply = NULL;
+	redisFree(c);
+	c = NULL;
+
+	return 0;
+}
+
+
+/**
+ * redis_commands
+ *
+ * the implementation
+ *
+ * see the MySQL error log for the fprintf output
+ *
+ * @return 0 everything is OK
+ *         1 connection error, check the host/port
+ *         2 error with an NULL reply , it is so weird
+ *         3 commands may be not a valid commands, or other error
+ */
+ 
+/**
+ * redis_commands implementation
+ *
+ * redis_commands(host,port,commands)
+ *
+ */
+my_bool redis_commands_init(
+	UDF_INIT *initid __attribute__((__unused__))
+,	UDF_ARGS *args
+,	char *message
+){
+	if(
+		args->arg_type[0]==STRING_RESULT &&
+		args->arg_type[1]==INT_RESULT &&
+		args->arg_type[2]==STRING_RESULT
+		)
+	{
+
+		args->maybe_null = 0; // each parameter could not be NULL
+
+		char *host = args->args[0];
+		unsigned long host_len = args->lengths[0];
+		long long port = *((long long*)args->args[1]);
+
+		char *cmd = args->args[2];
+		if(!check_host(host) || !check_ip(host))
+		{
+			snprintf(message,MYSQL_ERRMSG_SIZE,
+				"The first parameter is not a valid host or ip address");
+			return 2;
+		}
+
+		if(port < 0)
+		{
+			snprintf(message,MYSQL_ERRMSG_SIZE,
+				"The second parameter must be an integer bigger than zero");
+			return 2;
+		}
+
+		if(strlen(cmd) <=0 || NULL == cmd)
+		{
+			snprintf(message,MYSQL_ERRMSG_SIZE,"The third parameter error,[%s]\n",
+					cmd);
+			return 2;
+		}
+		// everthing looks OK.
+		return 0;
+		
+		} else {
+			snprintf(message,MYSQL_ERRMSG_SIZE,
+				"redis_commands(host,port,command1,command2,..) Expected exactly 3+ parameteres, a string, an integer and a string(s)" );		
+			return 1;
+		}
+
+}
+void redis_commands_deinit(UDF_INIT *initid __attribute__((__unused__))){
+	// nothing need to be cleanup
+}
+
+
+my_ulonglong redis_commands(
+		UDF_INIT *initid __attribute__((__unused__)),
+		UDF_ARGS *args,
+	char *is_null __attribute__((__unused__)),
+	char *error __attribute__((__unused__))){
+	char *hostorfile = args->args[0];
+	long long port = *((long long*)args->args[1]);
+	char *cmd;
+	int cmdptr = 2;
+	char input[MAX_LEN]; 
+  char *strs[MAX_STR] = {NULL}; 
+
+	// about the redis
+	redisContext *c = NULL;
+	redisReply *reply = NULL;
+
+	if (port>0) 
+	{
+		c = redisConnect(hostorfile,port);
+	} else {
+		c = redisConnectUnixNonBlock(hostorfile);
+	}
+
+	if (c->err)
+	{
+		fprintf(stderr,"connection error on (%s:%lld): %s\n",
+				hostorfile,port,c->errstr);
+		redisFree(c);
+		c = NULL;
+		return 1; 
+	}
+
+
+   FILE *fp = fopen("/tmp/rediscmd", "ab");
+
+	cmdptr = 2;
+	while (cmdptr < args->arg_count) {
+		cmd = args->args[cmdptr++];
+		if (fp != NULL) {
+			fputs(cmd,fp);
+			fputs("\n",fp);
+			}
+	
+                // split(cmd, strs);
+		//p = strtok(cmd,"\n");
+		//while(p!=NULL) {
+			
+		//	}
+		reply = redisCommand(c,"rpush TEST %s","asdf");
+
+
+		if(NULL == reply) {
+			fprintf(stderr,"redisCommand %s,error: %s\n",cmd,c->errstr);
+			redisFree(c);
+			c = NULL;
+			return 2;
+			}		
+
+		if(REDIS_REPLY_ERROR==reply->type) {
+			fprintf(stderr,"redisCommand \"%s\" reply error:%s\n",cmd,NULL == reply->str ? "NULL" : reply->str);
+			freeReplyObject(reply);
+			reply = NULL;
+			redisFree(c);
+			c = NULL;
+			return 3;
+			}
+
+		// do the clean work
+		freeReplyObject(reply);
+		reply = NULL;
+		}
+
+	if (fp != NULL) {
+		fclose(fp);
+		}
+	
 	redisFree(c);
 	c = NULL;
 
