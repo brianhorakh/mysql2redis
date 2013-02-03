@@ -40,6 +40,7 @@ typedef long long longlong;
 #include <stdlib.h>
 
 #include <ctype.h>
+#include <stdarg.h>
 
 /**
  * hiredis head file
@@ -427,9 +428,8 @@ my_ulonglong redis_commands(
 	long long port = *((long long*)args->args[1]);
 	char *cmd;
 	int cmdptr = 2;
-	char input[MAX_LEN]; 
-  char *strs[MAX_STR] = {NULL}; 
-
+	int i;
+  	
 	// about the redis
 	redisContext *c = NULL;
 	redisReply *reply = NULL;
@@ -450,48 +450,76 @@ my_ulonglong redis_commands(
 		return 1; 
 	}
 
+/*
+	Together with `redisCommand`, the function `redisCommandArgv` can be used to issue commands.
+	It has the following prototype:
 
-   FILE *fp = fopen("/tmp/rediscmd", "ab");
+    void *redisCommandArgv(redisContext *c, int argc, const char **argv, const size_t *argvlen);
+    
+    It takes the number of arguments `argc`, an array of strings `argv` and the lengths of the
+    arguments `argvlen`. For convenience, `argvlen` may be set to `NULL` and the function will
+    use `strlen(3)` on every argument to determine its length. Obviously, when any of the arguments
+    need to be binary safe, the entire array of lengths `argvlen` should be provided.
+    
+    The return value has the same semantic as `redisCommand`.
+*/
 
+	char *argv[100]; // = { "rpush %s %s", "TEST", "yippie" };
+	size_t *argvlen[100];
+	int argc;
+
+	// example sql:
+	//  do redis_commands("127.0.0.1",6379,"rpush","TEST","hello","","rpush","TEST","again");	
+				
 	cmdptr = 2;
-	while (cmdptr < args->arg_count) {
-		cmd = args->args[cmdptr++];
-		if (fp != NULL) {
-			fputs(cmd,fp);
-			fputs("\n",fp);
+	argc = 0;
+	while (cmdptr <= args->arg_count) {
+
+		cmd = "";
+		if (cmdptr < args->arg_count) {
+			cmd = args->args[cmdptr];
 			}
-	
-                // split(cmd, strs);
-		//p = strtok(cmd,"\n");
-		//while(p!=NULL) {
-			
-		//	}
-		reply = redisCommand(c,"rpush TEST %s","asdf");
 
+		if (strlen(cmd)>0) {
+			// add to command to array of commands
+			argv[argc] = cmd;
+			argvlen[argc] = (size_t *) strlen(cmd);	
+			argc++;
+			// fprintf(stderr,"==> %d: %s\n",argc,argv[argc-1]);
+			}
+		else if (argc == 0) {
+			// fprintf(stderr,"ignoring blank terminator\n");
+			}
+		else {
+			// for(i=0;i<argc;i++) {  fprintf(stderr,"redisCommand param[%d]: %s\n", i,argv[i]); }
+		      
+			reply = redisCommandArgv(c,argc,(const char **)argv,NULL);
 
-		if(NULL == reply) {
-			fprintf(stderr,"redisCommand %s,error: %s\n",cmd,c->errstr);
-			redisFree(c);
-			c = NULL;
-			return 2;
-			}		
+			if(NULL == reply) {
+				for(i=0;i<argc;i++) {  fprintf(stderr,"redisCommands param[%d]: %s\n", i,argv[i]); }
+				fprintf(stderr,"redisCommand %s,error: %s\n",argv[0],c->errstr);
+				redisFree(c);
+				c = NULL;
+				return 2;
+				}		
 
-		if(REDIS_REPLY_ERROR==reply->type) {
-			fprintf(stderr,"redisCommand \"%s\" reply error:%s\n",cmd,NULL == reply->str ? "NULL" : reply->str);
+			if(REDIS_REPLY_ERROR==reply->type) {
+				for(i=0;i<argc;i++) {  fprintf(stderr,"redisCommands param[%d]: %s\n", i,argv[i]); }
+				fprintf(stderr,"redisCommand \"%s\" reply error:%s\n",argv[0],NULL == reply->str ? "NULL" : reply->str);
+				freeReplyObject(reply);
+				reply = NULL;
+				redisFree(c);
+				c = NULL;
+				return 3;
+				}
+
+			// do the clean work
 			freeReplyObject(reply);
-			reply = NULL;
-			redisFree(c);
-			c = NULL;
-			return 3;
+			reply = NULL;			
+			argc = 0;
 			}
-
-		// do the clean work
-		freeReplyObject(reply);
-		reply = NULL;
-		}
-
-	if (fp != NULL) {
-		fclose(fp);
+			
+		cmdptr++;
 		}
 	
 	redisFree(c);
@@ -499,6 +527,8 @@ my_ulonglong redis_commands(
 
 	return 0;
 }
+
+
 
 
 
